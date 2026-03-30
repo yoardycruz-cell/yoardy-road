@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PIPO ROAD: ASFALTO CLARO</title>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; background: #1a5e3a; height: 100dvh; }
+        canvas { display: block; touch-action: none; margin: 0 auto; background: #666; }
+        #ui { position: absolute; top: 15px; left: 15px; color: white; text-shadow: 2px 2px #000; z-index: 100; font-family: sans-serif; pointer-events: none; width: calc(100% - 30px); }
+        #vidas-ui { position: absolute; top: 0; right: 0; display: flex; gap: 5px; }
+        #fuel-bar { width: 150px; height: 15px; background: #333; border: 2px solid #fff; margin-top: 5px; border-radius: 10px; overflow: hidden; }
+        #fuel-level { width: 100%; height: 100%; background: #f1c40f; transition: width 0.1s; }
+        #msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; color: white; background: rgba(0,0,0,0.9); padding: 30px; border-radius: 20px; display: none; z-index: 200; width: 85%; border: 4px solid #f1c40f; }
+        #extra-life-msg { position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%); color: #2ecc71; font-size: 32px; font-weight: bold; text-shadow: 3px 3px #000; display: none; z-index: 300; font-family: sans-serif; }
+        #record-ui { margin-top: 5px; font-size: 14px; color: #f1c40f; }
+        button { padding: 15px 30px; font-size: 18px; background: #27ae60; color: white; border: none; border-radius: 10px; margin-top: 20px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        DISTANCIA: <span id="dist">0</span>m | NIVEL: <span id="nivel">1</span>
+        <div id="record-ui">RÉCORD: <span id="best">0</span>m</div>
+        <div id="vidas-ui"></div>
+        <div id="fuel-text" style="margin-top:10px;">GASOLINA:</div>
+        <div id="fuel-bar"><div id="fuel-level"></div></div>
+    </div>
+    <div id="extra-life-msg">+1 VIDA EXTRA</div>
+    <div id="msg"><h1>¡VALIÓ EL BACANAL!</h1><p id="resumen"></p><button onclick="location.reload()">REINTENTAR</button></div>
+    <canvas id="gameCanvas"></canvas>
+    <audio id="musica" loop><source src="musica.mp3" type="audio/mpeg"></audio>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const audio = document.getElementById('musica');
+    canvas.width = Math.min(window.innerWidth, 450);
+    canvas.height = window.innerHeight;
+
+    const cargar = (n) => { const img = new Image(); img.src = n + '.png'; img.onload = () => img.ok = true; return img; };
+    
+    const imgYoardy = cargar('yoardy'); 
+    const imgCerveza = cargar('cerveza');
+    const imgPoli = cargar('patrulla_nica');
+    const imgManjol = cargar('manjol');
+    const livianos = [cargar('jaguar'), cargar('caiman'), cargar('pereza'), cargar('tucan'), cargar('cusuko'), cargar('tortuga'), cargar('mono'), cargar('guardabarranco'), cargar('muscle_car'), cargar('furgon_isuzu'), cargar('camion_coca_chico')];
+    const pesados = [cargar('ruta_polodemayo'), cargar('furgon_coca_largo'), cargar('rastra_optimus'), cargar('ruta_yutong'), cargar('camion_basura')];
+
+    let score = 0, level = 1, frame = 0, worldSpeed = 4.5, gameActive = true;
+    let fuel = 100, vidas = 3, cervezasTomadas = 0; 
+    let traffic = [], trees = [], beers = [], postlights = [], manjoles = [];
+    
+    // Sistema de Clima Independiente
+    let isRaining = false;
+    let rainTimer = 0;
+    
+    let dustParticles = [];
+    for(let i=0; i<50; i++) {
+        dustParticles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            size: 10 + Math.random() * 40,
+            speed: 2 + Math.random() * 5,
+            opacity: 0.1 + Math.random() * 0.2
+        });
+    }
+
+    const player = { x: canvas.width/2 - 30, y: canvas.height - 180, targetX: canvas.width/2 - 30, w: 60, h: 100 };
+
+    let highCore = localStorage.getItem('pipo_record') || 0;
+    document.getElementById('best').innerText = Math.floor(highCore/10);
+
+    for(let i=0; i < 10; i++) trees.push({ x: Math.random() < 0.5 ? 5 : canvas.width - 45, y: i * (canvas.height/5), s: 35 });
+
+    function drawWorld() {
+        ctx.fillStyle = "#1a5e3a"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#666"; ctx.fillRect(55, 0, canvas.width - 110, canvas.height);
+        ctx.strokeStyle = "white"; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(65, 0); ctx.lineTo(65, canvas.height); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(canvas.width - 65, 0); ctx.lineTo(canvas.width - 65, canvas.height); ctx.stroke();
+        ctx.strokeStyle = "#f1c40f"; ctx.lineWidth = 3;
+        let offset = (frame * worldSpeed) % 40;
+        for(let i = -40; i < canvas.height; i += 40) {
+            ctx.beginPath(); ctx.moveTo(canvas.width/2 - 4, i + offset); ctx.lineTo(canvas.width/2 - 4, i + 20 + offset); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(canvas.width/2 + 4, i + offset); ctx.lineTo(canvas.width/2 + 4, i + 20 + offset); ctx.stroke();
+        }
+    }
+
+    function update() {
+        if (!gameActive) return;
+        frame++; score++;
+        fuel -= 0.08; 
+        if (fuel <= 0) { fuel = 0; gameOver("Te quedaste sin gasolina!"); }
+        
+        const uiVidas = document.getElementById('vidas-ui');
+        uiVidas.innerHTML = '';
+        for(let i=0; i<vidas; i++) uiVidas.innerHTML += '<img src="yoardy.png" width="30" height="40" style="opacity:0.95; filter: drop-shadow(2px 2px 2px black);">';
+
+        document.getElementById('fuel-level').style.width = fuel + "%";
+        document.getElementById('dist').innerText = Math.floor(score/10);
+        
+        if (score > highCore) {
+            highCore = score;
+            localStorage.setItem('pipo_record', highCore);
+            document.getElementById('best').innerText = Math.floor(highCore/10);
+        }
+
+        drawWorld();
+
+        trees.forEach(t => {
+            t.y += worldSpeed; if (t.y > canvas.height) t.y = -60;
+            ctx.fillStyle = "#5d4037"; ctx.fillRect(t.x + 12, t.y + 30, 10, 15);
+            ctx.fillStyle = "#2e7d32"; ctx.beginPath(); ctx.arc(t.x + 17, t.y + 17, 17, 0, 7); ctx.fill();
+        });
+
+        if (frame % 120 === 0) { postlights.push({ x: canvas.width - 60, y: -100 }); }
+        postlights.forEach((p, i) => {
+            p.y += worldSpeed;
+            ctx.fillStyle = "#333"; ctx.fillRect(p.x + 40, p.y, 8, 100); 
+            ctx.fillRect(p.x + 10, p.y, 35, 6); 
+            let cycle = (score % 12000);
+            if (cycle >= 8000) {
+                ctx.save();
+                ctx.globalCompositeOperation = "lighter";
+                let gradient = ctx.createRadialGradient(p.x + 15, p.y + 5, 5, p.x + 15, p.y + 5, 80);
+                gradient.addColorStop(0, "rgba(255, 255, 150, 0.4)");
+                gradient.addColorStop(1, "rgba(255, 255, 150, 0)");
+                ctx.fillStyle = gradient;
+                ctx.beginPath(); ctx.arc(p.x + 15, p.y + 5, 80, 0, Math.PI*2); ctx.fill();
+                ctx.restore();
+                ctx.fillStyle = "#fff"; ctx.fillRect(p.x + 10, p.y, 10, 8); 
+            }
+            if (p.y > canvas.height) postlights.splice(i, 1);
+        });
+
+        if (frame % 350 === 0) manjoles.push({ x: 70 + Math.random()*(canvas.width-140), y: -60, w: 55, h: 55 });
+        manjoles.forEach((m, i) => {
+            m.y += worldSpeed;
+            if (imgManjol.ok) ctx.drawImage(imgManjol, m.x, m.y, m.w, m.h);
+            if (player.x < m.x + m.w - 15 && player.x + player.w > m.x + 15 && player.y < m.y + m.h - 15 && player.y + player.h > m.y + 15) {
+                vidas--; manjoles.splice(i, 1);
+                if (navigator.vibrate) navigator.vibrate(150);
+                if (vidas <= 0) gameOver("¡Caíste en un manjol sin tapa!");
+            }
+            if (m.y > canvas.height) manjoles.splice(i, 1);
+        });
+
+        if (frame % 250 === 0) beers.push({ x: 70 + Math.random()*(canvas.width-140), y: -50, w: 40, h: 60 });
+        beers.forEach((b, i) => {
+            b.y += worldSpeed;
+            if (imgCerveza.ok) ctx.drawImage(imgCerveza, b.x, b.y, b.w, b.h);
+            if (player.x < b.x + b.w && player.x + player.w > b.x && player.y < b.y + b.h && player.y + player.h > b.y) {
+                fuel = Math.min(100, fuel + 35); cervezasTomadas++;
+                if (cervezasTomadas >= 5) {
+                    if (vidas < 3) { 
+                        vidas++; const msg = document.getElementById('extra-life-msg');
+                        msg.style.display = 'block'; setTimeout(() => msg.style.display = 'none', 1500);
+                        if (navigator.vibrate) navigator.vibrate(200);
+                    }
+                    cervezasTomadas = 0;
+                }
+                beers.splice(i, 1);
+            }
+            if (b.y > canvas.height) beers.splice(i, 1);
+        });
+
+        if (frame % (Math.max(40, 70 - level*2)) === 0) {
+            let esP = Math.random() < 0.25;
+            let esPoli = !esP && Math.random() < 0.2;
+            traffic.push({ 
+                x: 70 + Math.random() * (canvas.width - (esP ? 190 : 140)), 
+                y: esP ? -350 : -120, w: esP ? 115 : 70, h: esP ? 290 : 110, 
+                v: worldSpeed + 1 + Math.random()*2, 
+                img: esP ? pesados[Math.floor(Math.random()*pesados.length)] : (esPoli ? imgPoli : livianos[Math.floor(Math.random()*livianos.length)]),
+                isLoco: Math.random() < 0.20, sideV: (Math.random() > 0.5 ? 1.2 : -1.2), isPoli: esPoli, flash: 0
+            });
+        }
+
+        traffic.forEach((car, i) => {
+            car.y += car.v;
+            if (car.isLoco) { car.x += car.sideV; if (car.x < 65 || car.x > canvas.width - car.w - 65) car.sideV *= -1; }
+            if (car.isPoli) {
+                car.flash++;
+                let color = car.flash % 14 < 7 ? "rgba(255, 0, 0," : "rgba(0, 0, 255,";
+                let gradient = ctx.createRadialGradient(car.x + car.w/2, car.y + 40, 5, car.x + car.w/2, car.y + 40, 60);
+                gradient.addColorStop(0, color + "0.8)"); gradient.addColorStop(1, color + "0)");
+                ctx.fillStyle = gradient; ctx.globalCompositeOperation = "lighter";
+                ctx.beginPath(); ctx.arc(car.x + car.w/2, car.y + 40, 70, 0, Math.PI * 2); ctx.fill();
+                ctx.globalCompositeOperation = "source-over";
+            }
+            if (car.img.ok) ctx.drawImage(car.img, car.x, car.y, car.w, car.h);
+            let m = 30; 
+            if (player.x + player.w - m > car.x + m && player.x + m < car.x + car.w - m &&
+                player.y + player.h - m > car.y + m && player.y + m < car.y + car.h - m) {
+                vidas--; traffic.splice(i, 1);
+                if (navigator.vibrate) navigator.vibrate(150);
+                if (vidas <= 0) gameOver(car.isPoli ? "Te paró la patrulla!" : "Chocaste en el bacanal!");
+            }
+            if (car.y > canvas.height + 400) traffic.splice(i, 1);
+        });
+
+        // --- LÓGICA DE CLIMA ---
+        let cycle = (score % 12000), handling = 0.15;
+        
+        // 1. Tormenta de Polvo (Sigue amarrada al atardecer por estética)
+        if (cycle > 4000 && cycle < 8000) { 
+            handling = 0.08; player.x += Math.sin(frame * 0.05) * 1.5;
+            ctx.fillStyle = "rgba(205, 170, 125, 0.15)"; ctx.fillRect(0,0,canvas.width,canvas.height);
+            dustParticles.forEach(p => {
+                ctx.beginPath(); ctx.fillStyle = `rgba(160, 140, 110, ${p.opacity})`;
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+                p.x += p.speed + 10; p.y += Math.sin(frame * 0.02) * 2;
+                if (p.x > canvas.width + 50) { p.x = -50; p.y = Math.random() * canvas.height; }
+            });
+        }
+
+        // 2. LLUVIA ALEATORIA (NUEVO: Puede caer en cualquier momento)
+        if (frame % 1000 === 0 && !isRaining) { 
+            if (Math.random() < 0.4) { isRaining = true; rainTimer = 600 + Math.random() * 1000; }
+        }
+        if (isRaining) {
+            handling = 0.05;
+            ctx.strokeStyle = "rgba(174, 194, 224, 0.5)"; ctx.lineWidth = 1;
+            for(let i=0; i<40; i++) {
+                ctx.beginPath(); let rx = Math.random()*canvas.width, ry = Math.random()*canvas.height;
+                ctx.moveTo(rx, ry); ctx.lineTo(rx + (worldSpeed * 0.1), ry + 20 + worldSpeed); ctx.stroke();
+            }
+            rainTimer--;
+            if (rainTimer <= 0) isRaining = false;
+        }
+
+        player.x += (player.targetX - player.x) * handling;
+        player.x = Math.max(55, Math.min(canvas.width - 115, player.x));
+
+        if (imgYoardy.ok) {
+            let reboteY = Math.sin(frame * 0.4) * 2;
+            let vibraH = Math.sin(frame * 0.8) * 1.5;
+            ctx.drawImage(imgYoardy, player.x, player.y + reboteY, player.w, player.h + vibraH);
+        }
+
+        // CICLO DE LUZ (DÍA, TARDE, NOCHE)
+        if (cycle > 4000 && cycle < 8000) { ctx.fillStyle = "rgba(255, 120, 0, 0.15)"; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+        else if (cycle >= 8000) { ctx.fillStyle = "rgba(0, 0, 30, 0.55)"; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+
+        if (score % 3000 === 0) { level++; worldSpeed += 0.2; document.getElementById('nivel').innerText = level; }
+        requestAnimationFrame(update);
+    }
+
+    function gameOver(m) { gameActive = false; document.getElementById('msg').style.display = 'block'; document.getElementById('resumen').innerText = m; }
+    canvas.addEventListener('touchstart', (e) => { if (audio.paused) audio.play(); player.targetX = e.touches[0].clientX - canvas.offsetLeft - 30; });
+    canvas.addEventListener('touchmove', (e) => { e.preventDefault(); player.targetX = e.touches[0].clientX - canvas.offsetLeft - 30; }, {passive: false});
+    update();
+</script>
+</body>
+</html>
